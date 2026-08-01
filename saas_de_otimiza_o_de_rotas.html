@@ -1,0 +1,827 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AG - Rotas de Entrega</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+    
+    <!-- Leaflet Routing Machine CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.css" />
+
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <style>
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #f3f4f6;
+        }
+        
+        #map {
+            height: 100%;
+            width: 100%;
+            min-height: 400px;
+            z-index: 10;
+        }
+
+        .leaflet-routing-container {
+            background-color: white;
+            padding: 1rem;
+            border-radius: 0.5rem;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            max-height: 300px;
+            overflow-y: auto;
+            display: none; /* Hide default routing control, we'll build our own UI */
+        }
+
+        /* Custom scrollbar for address list */
+        .address-list::-webkit-scrollbar {
+            width: 6px;
+        }
+        .address-list::-webkit-scrollbar-track {
+            background: #f1f1f1; 
+        }
+        .address-list::-webkit-scrollbar-thumb {
+            background: #c1c1c1; 
+            border-radius: 4px;
+        }
+        .address-list::-webkit-scrollbar-thumb:hover {
+            background: #a8a8a8; 
+        }
+
+        .draggable-item {
+            cursor: grab;
+        }
+        .draggable-item:active {
+            cursor: grabbing;
+        }
+
+        /* Autocomplete suggestions */
+        .suggestions-box {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            background: white;
+            border: 1px solid #e5e7eb;
+            border-top: none;
+            border-radius: 0 0 0.375rem 0.375rem;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            z-index: 50;
+            max-height: 200px;
+            overflow-y: auto;
+            display: none;
+        }
+        .suggestion-item {
+            padding: 0.5rem 1rem;
+            cursor: pointer;
+            border-bottom: 1px solid #f3f4f6;
+        }
+        .suggestion-item:hover {
+            background-color: #f3f4f6;
+        }
+    </style>
+</head>
+<body class="h-screen flex flex-col overflow-hidden text-gray-800">
+
+    <!-- Topbar -->
+    <header class="bg-blue-600 text-white shadow-md z-20 flex-shrink-0">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16 items-center">
+                <div class="flex items-center">
+                    <i class="fa-solid fa-truck-fast text-2xl mr-3"></i>
+                    <span class="font-bold text-xl tracking-tight">AG - Rotas de Entrega</span>
+                </div>
+                <div class="flex items-center space-x-4">
+                    <button onclick="toggleSettingsModal()" class="text-white hover:bg-blue-700 px-3 py-2 rounded-md text-sm font-medium transition" title="Configurar APIs">
+                        <i class="fa-solid fa-gear mr-2"></i>Configurações
+                    </button>
+                    <div class="h-8 w-8 rounded-full bg-blue-300 flex items-center justify-center text-blue-800 font-bold ml-4">
+                        US
+                    </div>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Modal de Configurações de API -->
+    <div id="settings-modal" class="fixed inset-0 bg-black/50 z-[3000] flex items-center justify-center hidden p-4">
+        <div class="bg-white rounded-xl shadow-2xl max-w-md w-full p-6 relative">
+            <button onclick="toggleSettingsModal()" class="absolute top-4 right-4 text-gray-400 hover:text-gray-600">
+                <i class="fa-solid fa-xmark text-xl"></i>
+            </button>
+            <div class="flex items-center space-x-3 mb-4 text-blue-600">
+                <i class="fa-solid fa-map-location-dot text-2xl"></i>
+                <h3 class="text-lg font-bold text-gray-800">Chave de API Mapbox</h3>
+            </div>
+            <p class="text-xs text-gray-600 mb-4">
+                Insira sua chave pública de acesso do <strong>Mapbox</strong> (<code class="bg-gray-100 px-1 rounded">pk.eyJ1...</code>) para habilitar o autocomplete de alta precisão. Se deixado em branco, o sistema usará a API gratuita Photon/OSRM.
+            </p>
+            <div class="mb-4">
+                <label for="mapbox-token-input" class="block text-xs font-semibold text-gray-700 mb-1">Mapbox Public Access Token</label>
+                <input type="text" id="mapbox-token-input" placeholder="pk.eyJ1..." class="w-full p-2 border border-gray-300 rounded-md text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none">
+            </div>
+            <div class="flex justify-end space-x-2">
+                <button onclick="saveMapboxToken()" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md text-sm font-medium transition">
+                    Salvar Chave
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <main class="flex-1 flex flex-col md:flex-row overflow-hidden relative">
+        
+        <!-- Sidebar: Route Planning -->
+        <div class="w-full md:w-96 bg-white shadow-lg z-20 flex flex-col h-full border-r border-gray-200 flex-shrink-0">
+            
+            <div class="p-4 border-b border-gray-200">
+                <h2 class="text-lg font-semibold text-gray-700 mb-2">Planejador de Rotas</h2>
+                
+                <!-- Vehicle Settings -->
+                <div class="flex space-x-2 mb-4 bg-gray-100 p-2 rounded-lg">
+                    <button id="btn-car" class="flex-1 py-1 px-2 bg-white shadow rounded text-sm font-medium text-blue-600 flex items-center justify-center transition" onclick="setVehicle('car')">
+                        <i class="fa-solid fa-car mr-2"></i> Carro
+                    </button>
+                    <button id="btn-truck" class="flex-1 py-1 px-2 text-gray-500 hover:bg-white hover:shadow rounded text-sm font-medium flex items-center justify-center transition" onclick="setVehicle('truck')">
+                        <i class="fa-solid fa-truck mr-2"></i> Caminhão
+                    </button>
+                </div>
+                
+                <!-- Fuel Cost Input -->
+                <div class="flex items-center text-sm text-gray-600 mb-4">
+                    <i class="fa-solid fa-gas-pump mr-2"></i>
+                    <label for="fuel-price" class="mr-2">Preço Combustível (R$/L):</label>
+                    <input type="number" id="fuel-price" value="5.80" step="0.1" class="w-20 p-1 border rounded text-right focus:outline-none focus:ring-1 focus:ring-blue-500">
+                </div>
+                <div class="flex items-center text-sm text-gray-600 mb-4">
+                    <i class="fa-solid fa-gauge-high mr-2"></i>
+                    <label for="consumption" class="mr-2">Consumo (km/L):</label>
+                    <input type="number" id="consumption" value="10" step="0.5" class="w-20 p-1 border rounded text-right focus:outline-none focus:ring-1 focus:ring-blue-500">
+                </div>
+            </div>
+
+            <!-- Addresses List -->
+            <div class="flex-1 p-4 overflow-y-auto address-list bg-gray-50">
+                
+                <!-- Add New Address Input -->
+                <div class="relative mb-6">
+                    <div class="flex">
+                        <div class="relative flex-1">
+                            <input type="text" id="address-input" placeholder="Digite um endereço para adicionar..." class="w-full pl-3 pr-10 py-2 border border-gray-300 rounded-l-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm">
+                            <div id="suggestions" class="suggestions-box"></div>
+                        </div>
+                        <button onclick="addAddressFromInput()" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-r-md transition">
+                            <i class="fa-solid fa-plus"></i>
+                        </button>
+                    </div>
+                    <p class="text-xs text-gray-500 mt-1"><i class="fa-solid fa-circle-info mr-1"></i>Pressione Enter para buscar.</p>
+                </div>
+
+                <!-- Sortable List Container -->
+                <div id="route-points" class="space-y-3">
+                    <!-- Default Points to start with -->
+                </div>
+                
+                <button onclick="addEmptyStop()" class="w-full mt-4 py-2 border-2 border-dashed border-gray-300 rounded-lg text-gray-500 hover:border-blue-500 hover:text-blue-500 transition text-sm font-medium flex items-center justify-center">
+                    <i class="fa-solid fa-location-dot mr-2"></i> Adicionar Parada Vazia
+                </button>
+            </div>
+
+            <!-- Route Summary & Actions -->
+            <div class="p-4 bg-white border-t border-gray-200">
+                
+                <div id="route-summary" class="hidden mb-4 bg-blue-50 p-3 rounded-lg border border-blue-100">
+                    <h3 class="font-bold text-blue-800 text-sm mb-2">Resumo da Rota</h3>
+                    <div class="grid grid-cols-2 gap-2 text-sm mb-3">
+                        <div class="flex items-center text-gray-700">
+                            <i class="fa-regular fa-clock w-5 text-center text-blue-600"></i>
+                            <span id="summary-time">--</span>
+                        </div>
+                        <div class="flex items-center text-gray-700">
+                            <i class="fa-solid fa-road w-5 text-center text-blue-600"></i>
+                            <span id="summary-distance">--</span>
+                        </div>
+                        <div class="flex items-center text-gray-700 col-span-2 mt-1 pt-1 border-t border-blue-200">
+                            <i class="fa-solid fa-money-bill-wave w-5 text-center text-green-600"></i>
+                            <span class="font-semibold text-green-700">Est. Combustível: R$ <span id="summary-cost">--</span></span>
+                        </div>
+                    </div>
+
+                    <!-- Botões de Exportação para GPS Externa -->
+                    <div class="space-y-2 border-t border-blue-200 pt-3 mt-2">
+                        <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider block">Navegação Externa:</span>
+                        <div class="grid grid-cols-2 gap-2">
+                            <button onclick="openGoogleMapsRoute()" class="bg-white hover:bg-gray-100 text-gray-800 border border-gray-300 text-xs py-2 px-2 rounded-md font-semibold transition flex items-center justify-center shadow-sm">
+                                <i class="fa-brands fa-google text-red-500 mr-1.5 text-sm"></i> Google Maps
+                            </button>
+                            <button onclick="shareRouteWhatsApp()" class="bg-green-600 hover:bg-green-700 text-white text-xs py-2 px-2 rounded-md font-semibold transition flex items-center justify-center shadow-sm">
+                                <i class="fa-brands fa-whatsapp text-sm mr-1.5"></i> Enviar Whats
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="flex space-x-2">
+                    <button onclick="calculateRoute()" class="flex-1 bg-green-600 hover:bg-green-700 text-white py-2 px-4 rounded-md font-medium transition shadow-sm flex items-center justify-center">
+                        <i class="fa-solid fa-route mr-2"></i> Otimizar Rota
+                    </button>
+                    <button onclick="clearAll()" class="bg-red-100 hover:bg-red-200 text-red-700 py-2 px-3 rounded-md transition" title="Limpar Tudo">
+                        <i class="fa-solid fa-trash-can"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Map Area -->
+        <div class="flex-1 relative bg-gray-200">
+            <div id="map"></div>
+            
+            <!-- Map Overlay UI (e.g., loading state) -->
+            <div id="map-loading" class="absolute inset-0 bg-white/70 backdrop-blur-sm z-[1000] flex flex-col items-center justify-center hidden">
+                <i class="fa-solid fa-spinner fa-spin text-4xl text-blue-600 mb-4"></i>
+                <p class="text-lg font-semibold text-gray-700">Calculando rota otimizada...</p>
+                <p class="text-sm text-gray-500">Isso pode levar alguns segundos dependendo do número de paradas.</p>
+            </div>
+            
+            <!-- Legend -->
+            <div class="absolute bottom-6 right-6 z-[400] bg-white p-3 rounded-lg shadow-md border border-gray-200 text-xs text-gray-600">
+                <div class="flex items-center mb-1"><div class="w-3 h-3 rounded-full bg-green-500 mr-2"></div> Ponto de Partida</div>
+                <div class="flex items-center mb-1"><div class="w-3 h-3 rounded-full bg-blue-500 mr-2"></div> Paradas Intermediárias</div>
+                <div class="flex items-center"><div class="w-3 h-3 rounded-full bg-red-500 mr-2"></div> Destino Final</div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Toast Container -->
+    <div id="toast-container" class="fixed top-5 right-5 z-[2000] flex flex-col space-y-2 pointer-events-none"></div>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    <!-- Leaflet Routing Machine JS -->
+    <script src="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.js"></script>
+
+    <script>
+        // Global State
+        let map;
+        let routingControl = null;
+        let vehicleType = 'car';
+        let waypoints = []; // Array of objects { lat, lng, name, id }
+        let nextId = 1;
+        let mapboxToken = localStorage.getItem('mapbox_token') || '';
+        
+        // Initial mock data for demonstration
+        const initialPoints = [
+            { id: 'start', name: 'Centro, Rio de Janeiro', lat: -22.9068, lng: -43.1729 },
+            { id: 'pt1', name: 'Copacabana, Rio de Janeiro', lat: -22.9711, lng: -43.1822 },
+            { id: 'pt2', name: 'Tijuca, Rio de Janeiro', lat: -22.9329, lng: -43.2427 }
+        ];
+
+        // Initialize Application
+        document.addEventListener('DOMContentLoaded', () => {
+            initMap();
+            loadInitialPoints();
+            setupAutocomplete();
+            if (mapboxToken) {
+                document.getElementById('mapbox-token-input').value = mapboxToken;
+            }
+        });
+
+        function toggleSettingsModal() {
+            const modal = document.getElementById('settings-modal');
+            modal.classList.toggle('hidden');
+        }
+
+        function saveMapboxToken() {
+            const token = document.getElementById('mapbox-token-input').value.trim();
+            mapboxToken = token;
+            localStorage.setItem('mapbox_token', token);
+            toggleSettingsModal();
+            showToast(token ? "Chave Mapbox salva com sucesso!" : "Modo gratuito ativado (Photon/OSRM).", "success");
+        }
+
+        function setVehicle(type) {
+            vehicleType = type;
+            
+            const btnCar = document.getElementById('btn-car');
+            const btnTruck = document.getElementById('btn-truck');
+            const consumptionInput = document.getElementById('consumption');
+            
+            if (type === 'car') {
+                // Style buttons
+                btnCar.className = "flex-1 py-1 px-2 bg-white shadow rounded text-sm font-medium text-blue-600 flex items-center justify-center transition";
+                btnTruck.className = "flex-1 py-1 px-2 text-gray-500 hover:bg-white hover:shadow rounded text-sm font-medium flex items-center justify-center transition";
+                // Adjust default consumption
+                consumptionInput.value = 10.0; 
+            } else {
+                btnTruck.className = "flex-1 py-1 px-2 bg-white shadow rounded text-sm font-medium text-blue-600 flex items-center justify-center transition";
+                btnCar.className = "flex-1 py-1 px-2 text-gray-500 hover:bg-white hover:shadow rounded text-sm font-medium flex items-center justify-center transition";
+                // Adjust default consumption for truck
+                consumptionInput.value = 4.0;
+            }
+            
+            // Recalculate if route exists
+            if (routingControl) {
+                updateCostEstimate();
+            }
+        }
+
+        function loadInitialPoints() {
+            waypoints = [...initialPoints];
+            renderWaypoints();
+        }
+
+        function renderWaypoints() {
+            const container = document.getElementById('route-points');
+            container.innerHTML = '';
+            
+            waypoints.forEach((wp, index) => {
+                const isStart = index === 0;
+                const isEnd = index === waypoints.length - 1 && waypoints.length > 1;
+                
+                let iconColor = 'text-blue-500';
+                if (isStart) iconColor = 'text-green-500';
+                else if (isEnd) iconColor = 'text-red-500';
+
+                let badge = '';
+                if (isStart) badge = '<span class="text-[10px] bg-green-100 text-green-800 px-1.5 py-0.5 rounded font-semibold ml-2">Origem</span>';
+                else if (isEnd) badge = '<span class="text-[10px] bg-red-100 text-red-800 px-1.5 py-0.5 rounded font-semibold ml-2">Destino</span>';
+                else badge = `<span class="text-[10px] bg-blue-100 text-blue-800 px-1.5 py-0.5 rounded font-semibold ml-2">Parada ${index}</span>`;
+
+                const wazeBtn = wp.lat ? `
+                    <button onclick="openWazeStop(${wp.lat}, ${wp.lng})" class="text-blue-600 hover:text-blue-800 transition text-xs flex items-center mt-1 font-medium" title="Abrir esta parada no Waze">
+                        <i class="fa-solid fa-location-arrow text-[10px] mr-1"></i> Waze
+                    </button>
+                ` : '';
+
+                const html = `
+                    <div class="bg-white border border-gray-200 rounded-lg p-3 shadow-sm flex items-start group transition hover:border-blue-300 draggable-item" draggable="true" ondragstart="dragStart(event, ${index})" ondragover="dragOver(event)" ondrop="drop(event, ${index})">
+                        <div class="mt-1 mr-3 cursor-move text-gray-400 hover:text-gray-600">
+                            <i class="fa-solid fa-grip-vertical"></i>
+                        </div>
+                        <div class="flex-1 min-w-0">
+                            <div class="flex items-center mb-1">
+                                <i class="fa-solid fa-location-dot ${iconColor} text-sm"></i>
+                                ${badge}
+                            </div>
+                            <div class="text-sm text-gray-800 font-medium truncate" title="${wp.name}">
+                                ${wp.name || 'Endereço não definido'}
+                            </div>
+                            <div class="flex items-center justify-between mt-0.5">
+                                ${wp.lat ? `<span class="text-[10px] text-gray-400">Lat: ${wp.lat.toFixed(4)}, Lng: ${wp.lng.toFixed(4)}</span>` : '<span class="text-[10px] text-orange-400">Defina o endereço</span>'}
+                                ${wazeBtn}
+                            </div>
+                        </div>
+                        <button onclick="removeWaypoint(${index})" class="ml-2 text-gray-400 hover:text-red-500 transition px-2 py-1">
+                            <i class="fa-solid fa-xmark"></i>
+                        </button>
+                    </div>
+                `;
+                container.insertAdjacentHTML('beforeend', html);
+            });
+        }
+
+        function removeWaypoint(index) {
+            waypoints.splice(index, 1);
+            renderWaypoints();
+        }
+
+        function addEmptyStop() {
+            waypoints.push({ id: `new_${nextId++}`, name: '', lat: null, lng: null });
+            renderWaypoints();
+            // Scroll to bottom
+            const list = document.querySelector('.address-list');
+            list.scrollTop = list.scrollHeight;
+        }
+
+        function clearAll() {
+            waypoints = [];
+            if (routingControl) {
+                map.removeControl(routingControl);
+                routingControl = null;
+            }
+            document.getElementById('route-summary').classList.add('hidden');
+            renderWaypoints();
+            addEmptyStop(); // Start with at least one empty box
+        }
+
+        let draggedIndex = null;
+
+        function dragStart(event, index) {
+            draggedIndex = index;
+            event.dataTransfer.effectAllowed = 'move';
+            // Slight delay to allow UI to update if needed
+            setTimeout(() => {
+                event.target.classList.add('opacity-50');
+            }, 0);
+        }
+
+        function dragOver(event) {
+            event.preventDefault();
+            event.dataTransfer.dropEffect = 'move';
+        }
+
+        function drop(event, dropIndex) {
+            event.preventDefault();
+            
+            // Remove opacity class from all items (cleanup)
+            document.querySelectorAll('.draggable-item').forEach(el => el.classList.remove('opacity-50'));
+
+            if (draggedIndex === null || draggedIndex === dropIndex) return;
+
+            // Reorder array
+            const item = waypoints.splice(draggedIndex, 1)[0];
+            waypoints.splice(dropIndex, 0, item);
+            
+            draggedIndex = null;
+            renderWaypoints();
+        }
+
+        function setupAutocomplete() {
+            const input = document.getElementById('address-input');
+            const suggestionsBox = document.getElementById('suggestions');
+            let timeout = null;
+
+            input.addEventListener('input', (e) => {
+                const query = e.target.value;
+                clearTimeout(timeout);
+                
+                if (query.length < 3) {
+                    suggestionsBox.style.display = 'none';
+                    return;
+                }
+
+                timeout = setTimeout(() => {
+                    searchAddress(query);
+                }, 500); // Debounce
+            });
+
+            // Close suggestions when clicking outside
+            document.addEventListener('click', (e) => {
+                if (e.target !== input && e.target !== suggestionsBox) {
+                    suggestionsBox.style.display = 'none';
+                }
+            });
+            
+            // Enter key to add directly
+            input.addEventListener('keypress', function (e) {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    addAddressFromInput();
+                }
+            });
+        }
+
+        async function searchAddress(query) {
+            const suggestionsBox = document.getElementById('suggestions');
+            try {
+                let url = '';
+                let isMapbox = false;
+
+                if (mapboxToken) {
+                    isMapbox = true;
+                    url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json?access_token=${mapboxToken}&country=br&language=pt&limit=5`;
+                } else {
+                    url = `https://photon.komoot.io/api/?q=${encodeURIComponent(query)}&limit=5&lat=-22.9068&lon=-43.1729`;
+                }
+
+                const response = await fetch(url);
+                const data = await response.json();
+
+                suggestionsBox.innerHTML = '';
+                
+                if (isMapbox && data.features && data.features.length > 0) {
+                    data.features.forEach(item => {
+                        const div = document.createElement('div');
+                        div.className = 'suggestion-item text-sm truncate';
+                        div.textContent = item.place_name;
+                        div.title = item.place_name;
+                        div.onclick = () => selectSuggestion({lat: item.center[1], lon: item.center[0]}, item.text || item.place_name.split(',')[0]);
+                        suggestionsBox.appendChild(div);
+                    });
+                    suggestionsBox.style.display = 'block';
+                } else if (!isMapbox && data.features && data.features.length > 0) {
+                    data.features.forEach(item => {
+                        const props = item.properties;
+                        const div = document.createElement('div');
+                        div.className = 'suggestion-item text-sm truncate';
+                        
+                        let displayName = props.name || '';
+                        if (props.street) displayName += displayName ? `, ${props.street}` : props.street;
+                        if (props.city) displayName += ` - ${props.city}`;
+                        if (props.state) displayName += `, ${props.state}`;
+                        if (!displayName) displayName = 'Endereço não especificado';
+
+                        const shortName = (props.name || props.street || displayName.split(',')[0]).trim();
+                        
+                        div.textContent = displayName;
+                        div.title = displayName;
+                        div.onclick = () => selectSuggestion({lat: item.geometry.coordinates[1], lon: item.geometry.coordinates[0]}, shortName);
+                        suggestionsBox.appendChild(div);
+                    });
+                    suggestionsBox.style.display = 'block';
+                } else {
+                    suggestionsBox.style.display = 'none';
+                }
+            } catch (error) {
+                console.error("Erro na busca de endereço:", error);
+            }
+        }
+
+        function selectSuggestion(item, shortName) {
+            const input = document.getElementById('address-input');
+            input.value = shortName;
+            
+            // Salva as coordenadas temporariamente no input
+            input.dataset.lat = item.lat;
+            input.dataset.lng = item.lon;
+            
+            document.getElementById('suggestions').style.display = 'none';
+        }
+
+        function addAddressFromInput() {
+            const input = document.getElementById('address-input');
+            const name = input.value.trim();
+            const lat = parseFloat(input.dataset.lat);
+            const lng = parseFloat(input.dataset.lng);
+
+            if (!name) {
+                showToast("Digite um endereço para adicionar.", "warning");
+                return;
+            }
+            
+            if (isNaN(lat) || isNaN(lng)) {
+                showToast("Por favor, selecione um endereço da lista de sugestões.", "warning");
+                return;
+            }
+
+            waypoints.push({ id: `wp_${nextId++}`, name: name, lat: lat, lng: lng });
+            input.value = '';
+            delete input.dataset.lat;
+            delete input.dataset.lng;
+            renderWaypoints();
+            
+            // Faz o scroll ir até o final da lista
+            const list = document.querySelector('.address-list');
+            list.scrollTop = list.scrollHeight;
+        }
+
+        function initMap() {
+            map = L.map('map').setView([-22.9068, -43.1729], 12); // Focado no Rio de Janeiro por padrão
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '&copy; OpenStreetMap contributors'
+            }).addTo(map);
+        }
+
+        async function calculateRoute() {
+            const validWaypoints = waypoints.filter(wp => wp.lat !== null && wp.lng !== null);
+            
+            if (validWaypoints.length < 2) {
+                showToast("Adicione pelo menos 2 endereços válidos para traçar a rota.", "warning");
+                return;
+            }
+
+            const loading = document.getElementById('map-loading');
+            loading.classList.remove('hidden');
+
+            try {
+                // Se tiver mais de 2 pontos (Origem, +1 Parada, Destino), usa a IA para otimizar a ordem (Caixeiro Viajante)
+                if (validWaypoints.length > 2) {
+                    const coordsString = validWaypoints.map(wp => `${wp.lng},${wp.lat}`).join(';');
+                    
+                    // API OSRM Trip: Calcula o caminho mais curto reordenando as paradas.
+                    // source=first e destination=last garantem que sua Origem e Destino fiquem travados.
+                    const tripUrl = `https://router.project-osrm.org/trip/v1/driving/${coordsString}?source=first&destination=last&roundtrip=false`;
+                    
+                    const response = await fetch(tripUrl);
+                    const data = await response.json();
+
+                    if (data.code === 'Ok') {
+                        // Cria uma nova lista vazia e organiza os pontos na nova posição calculada
+                        const optimizedWaypoints = new Array(validWaypoints.length);
+                        
+                        data.waypoints.forEach((wpData, originalIndex) => {
+                            const newPosition = wpData.waypoint_index;
+                            optimizedWaypoints[newPosition] = validWaypoints[originalIndex];
+                        });
+                        
+                        // Salva os pontos vazios (que o usuário adicionou mas não preencheu) para não perder
+                        const emptyWaypoints = waypoints.filter(wp => wp.lat === null || wp.lng === null);
+                        
+                        // Atualiza a lista global com a ordem inteligente
+                        waypoints = [...optimizedWaypoints, ...emptyWaypoints];
+                        
+                        // Re-renderiza a lista lateral para você ver os pontos trocando de lugar magicamente
+                        renderWaypoints();
+                        showToast("Ordem das paradas otimizada para o menor trajeto!", "success");
+                    }
+                }
+            } catch (error) {
+                console.error("Erro na otimização da rota:", error);
+                showToast("Não foi possível otimizar a ordem, usando a ordem original.", "warning");
+            }
+
+            // Agora que a lista está na melhor ordem possível, mandamos desenhar a rota
+            drawRouteOnMap(waypoints.filter(wp => wp.lat !== null && wp.lng !== null));
+        }
+
+        function drawRouteOnMap(routeWaypointsData) {
+            const loading = document.getElementById('map-loading');
+
+            if (routingControl) {
+                map.removeControl(routingControl);
+            }
+
+            const routeWaypoints = routeWaypointsData.map(wp => L.latLng(wp.lat, wp.lng));
+
+            routingControl = L.Routing.control({
+                waypoints: routeWaypoints,
+                router: L.Routing.osrmv1({
+                    serviceUrl: 'https://router.project-osrm.org/route/v1'
+                }),
+                lineOptions: {
+                    styles: [{color: '#2563EB', opacity: 0.8, weight: 6}] // Tailwind blue-600
+                },
+                createMarker: function(i, wp, nWps) {
+                    let markerColor = '#3B82F6'; // Azul p/ intermediários
+                    if (i === 0) markerColor = '#22C55E'; // Verde p/ Origem
+                    else if (i === nWps - 1) markerColor = '#EF4444'; // Vermelho p/ Destino
+
+                    const markerHtml = `
+                        <div style="background-color: ${markerColor}; color: white; width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; border: 2px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3); font-size: 12px;">
+                            ${i === 0 ? 'A' : String.fromCharCode(65 + i)}
+                        </div>
+                    `;
+
+                    return L.marker(wp.latLng, {
+                        icon: L.divIcon({
+                            className: 'custom-route-marker',
+                            html: markerHtml,
+                            iconSize: [24, 24],
+                            iconAnchor: [12, 12]
+                        })
+                    }).bindPopup(routeWaypointsData[i].name);
+                },
+                addWaypoints: false,
+                routeWhileDragging: false,
+                fitSelectedRoutes: true,
+                showAlternatives: false,
+                show: false // Oculta a caixa de instruções em texto
+            }).on('routesfound', function(e) {
+                const routes = e.routes;
+                const summary = routes[0].summary;
+                
+                document.getElementById('summary-time').innerText = formatTime(summary.totalTime);
+                document.getElementById('summary-distance').innerText = formatDistance(summary.totalDistance);
+                document.getElementById('summary-distance').dataset.meters = summary.totalDistance; 
+                
+                updateCostEstimate();
+                document.getElementById('route-summary').classList.remove('hidden');
+                
+                loading.classList.add('hidden');
+            }).on('routingerror', function(e) {
+                loading.classList.add('hidden');
+                showToast("Erro ao calcular a rota no mapa.", "error");
+                console.error(e);
+            }).addTo(map);
+        }
+
+        function updateCostEstimate() {
+            const distanceSpan = document.getElementById('summary-distance');
+            if (!distanceSpan.dataset.meters) return;
+
+            const distanceKm = parseFloat(distanceSpan.dataset.meters) / 1000;
+            const fuelPrice = parseFloat(document.getElementById('fuel-price').value) || 0;
+            const consumption = parseFloat(document.getElementById('consumption').value) || 1;
+
+            const litersNeeded = distanceKm / consumption;
+            const totalCost = litersNeeded * fuelPrice;
+
+            document.getElementById('summary-cost').innerText = totalCost.toFixed(2).replace('.', ',');
+        }
+
+        function formatTime(seconds) {
+            if (seconds < 3600) {
+                return Math.round(seconds / 60) + ' min';
+            }
+            const hours = Math.floor(seconds / 3600);
+            const mins = Math.round((seconds % 3600) / 60);
+            return hours + 'h ' + mins + 'm';
+        }
+
+        function formatDistance(meters) {
+            if (meters < 1000) return Math.round(meters) + ' m';
+            return (meters / 1000).toFixed(1) + ' km';
+        }
+
+        // Listener global de preços (aplica após carregamento)
+        document.addEventListener('DOMContentLoaded', () => {
+            document.getElementById('fuel-price').addEventListener('input', updateCostEstimate);
+            document.getElementById('consumption').addEventListener('input', updateCostEstimate);
+        });
+
+        function openWazeStop(lat, lng) {
+            const url = `https://www.waze.com/ul?ll=${lat},${lng}&navigate=yes`;
+            window.open(url, '_blank');
+        }
+
+        function openGoogleMapsRoute() {
+            const validWaypoints = waypoints.filter(wp => wp.lat !== null && wp.lng !== null);
+            if (validWaypoints.length < 2) {
+                showToast("Adicione pelo menos 2 pontos para gerar a rota no Google Maps.", "warning");
+                return;
+            }
+
+            const origin = `${validWaypoints[0].lat},${validWaypoints[0].lng}`;
+            const destination = `${validWaypoints[validWaypoints.length - 1].lat},${validWaypoints[validWaypoints.length - 1].lng}`;
+            
+            let waypointsParam = '';
+            if (validWaypoints.length > 2) {
+                const intermediate = validWaypoints.slice(1, -1);
+                waypointsParam = '&waypoints=' + intermediate.map(wp => `${wp.lat},${wp.lng}`).join('|');
+            }
+
+            const googleUrl = `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${destination}${waypointsParam}&travelmode=driving`;
+            window.open(googleUrl, '_blank');
+        }
+
+        function shareRouteWhatsApp() {
+            const validWaypoints = waypoints.filter(wp => wp.lat !== null && wp.lng !== null);
+            if (validWaypoints.length === 0) {
+                showToast("Nenhuma parada válida para exportar.", "warning");
+                return;
+            }
+
+            let message = "🚚 *ROTA DE ENTREGA OTIMIZADA*\n\n";
+            validWaypoints.forEach((wp, index) => {
+                let tag = index === 0 ? "🏁 [Origem]" : (index === validWaypoints.length - 1 ? "🎯 [Destino]" : `📦 [Parada ${index}]`);
+                message += `${tag} *${wp.name}*\n`;
+                message += `🔗 Waze: https://www.waze.com/ul?ll=${wp.lat},${wp.lng}&navigate=yes\n\n`;
+            });
+
+            const origin = `${validWaypoints[0].lat},${validWaypoints[0].lng}`;
+            const destination = `${validWaypoints[validWaypoints.length - 1].lat},${validWaypoints[validWaypoints.length - 1].lng}`;
+            let waypointsParam = '';
+            if (validWaypoints.length > 2) {
+                waypointsParam = '&waypoints=' + validWaypoints.slice(1, -1).map(wp => `${wp.lat},${wp.lng}`).join('|');
+            }
+            const fullGoogleMapUrl = `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${destination}${waypointsParam}&travelmode=driving`;
+            
+            message += `🗺️ *Rota Completa no Google Maps:*\n${fullGoogleMapUrl}`;
+
+            const whatsappUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(message)}`;
+            window.open(whatsappUrl, '_blank');
+        }
+
+        function showToast(message, type = 'info') {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            
+            // Estilização baseada no tipo de alerta
+            let bgColor = 'bg-blue-600';
+            let icon = 'fa-circle-info';
+            
+            if (type === 'error') {
+                bgColor = 'bg-red-600';
+                icon = 'fa-circle-xmark';
+            } else if (type === 'warning') {
+                bgColor = 'bg-orange-500';
+                icon = 'fa-triangle-exclamation';
+            } else if (type === 'success') {
+                bgColor = 'bg-green-600';
+                icon = 'fa-circle-check';
+            }
+
+            // Classes do Tailwind para animação e visual
+            toast.className = `${bgColor} text-white px-4 py-3 rounded-lg shadow-xl flex items-center space-x-3 transition-all duration-300 transform translate-x-full opacity-0 pointer-events-auto`;
+            
+            toast.innerHTML = `
+                <i class="fa-solid ${icon} text-lg"></i>
+                <span class="text-sm font-medium">${message}</span>
+            `;
+
+            container.appendChild(toast);
+
+            // Trigger da animação de entrada
+            requestAnimationFrame(() => {
+                toast.classList.remove('translate-x-full', 'opacity-0');
+            });
+
+            // Remover automaticamente após 3.5 segundos
+            setTimeout(() => {
+                toast.classList.add('translate-x-full', 'opacity-0');
+                setTimeout(() => {
+                    if(toast.parentElement) toast.remove();
+                }, 300);
+            }, 3500);
+        }
+
+    </script>
+</body>
+</html>
